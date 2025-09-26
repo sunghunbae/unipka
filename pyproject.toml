@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unipka"
+dynamic = ["version"]
+requires-python = ">=3.12"
+dependencies = [
+    "torch",
+    "rdkit>=2024",
+    "pandas",
+    "pytest",
+    ]
+authors = [{name = "Sung-Hun Bae", email="sunghun.bae@gmail.com"}, ]
+maintainers = [{name = "Sung-Hun Bae", email="sunghun.bae@gmail.com"}, ]
+description = "pKa prediction"
+readme = "README.md"
+license = "Apache-2.0"
+keywords = ["pKa", "protonation", "ensemble"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    ]
+
+[project.urls]
+Homepage        = "https://github.com/sunghunbae/unipka"
+Repository      = "https://github.com/sunghunbae/unipka.git"
+Issues          = "https://github.com/sunghunbae/unipka/issues"
+Changelog       = "https://github.com/sunghunbae/unipka/blob/master/CHANGELOG.md"
+Documentation   = "https://sunghunbae.github.io/unipka/"
+
+[project.scripts]
+
+[tool.setuptools.dynamic]
+version = {attr = "unipka.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"unipka.pattern" = ["*.tsv"]

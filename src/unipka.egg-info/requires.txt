@@ -1,0 +1,4 @@
+torch
+rdkit>=2024
+pandas
+pytest
