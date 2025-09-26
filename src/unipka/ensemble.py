@@ -1,7 +1,11 @@
-from rdkit import Chem
-import pandas as pd
 from collections import OrderedDict
 from typing import Callable
+import importlib
+import pandas as pd
+
+from rdkit import Chem
+
+from .tautomerism import ComprehensiveTautomers, RdkTautomers
 
 
 # Unreasonable chemical structures to be filtered
@@ -27,7 +31,6 @@ FILTER_PATTERNS = list(map(Chem.MolFromSmarts, [
     "[cX2-1]",
     "[N+1](=O)-[O]-[H]"
 ]))
-
 
 
 def sanitize_checker(smi: str, filter_patterns: list[Chem.Mol], verbose: bool=False) -> bool:
@@ -123,22 +126,17 @@ def stereo_filter(smis: list[str]) -> list[str]:
     return [value[0] for value in filtered_smi_dict.values()]
 
 
-def prot(mol: Chem.Mol, idx: int, mode: str) -> Chem.Mol: 
-    '''
-    Protonate / Deprotonate a molecule at a specified site
+def prot(mol: Chem.Mol, idx: int, mode: str) -> tuple[Chem.Mol, str]: 
+    """Protonate or deprotonate a molecule at a specific site.
 
-    Params:
-    ----
-    `mol`: Molecule
+    Args:
+        mol (Chem.Mol): molecule to be (de)protonated
+        idx (int): atom index of reaction site
+        mode (str): 'a2b' (protonate) or 'b2a' (deprotonate)
 
-    `idx`: Index of reaction 
-
-    `mode`: `a2b` means deprotonization, with a hydrogen atom or a heavy atom at `idx`; `b2a` means protonization, with a heavy atom at `idx` 
-
-    Return:
-    ----
-    `mol_prot`: (De)protonated molecule
-    '''
+    Returns:
+        Chem.Mol: (de)protonated molecule
+    """
     mw = Chem.RWMol(mol)
     if mode == "a2b":
         atom_H = mw.GetAtomWithIdx(idx)
@@ -165,237 +163,241 @@ def prot(mol: Chem.Mol, idx: int, mode: str) -> Chem.Mol:
     Chem.SanitizeMol(mol_prot)
     mol_prot = Chem.MolFromSmiles(Chem.MolToSmiles(mol_prot, canonical=False))
     mol_prot = Chem.AddHs(mol_prot)
-    return mol_prot
+    _ = Chem.Mol(mol_prot) # copy
+    mol_prot_smiles = Chem.CanonSmiles(Chem.MolToSmiles(Chem.RemoveHs(_)))
+
+    return (mol_prot, mol_prot_smiles)
 
 
-def match_template(template: pd.DataFrame, mol: Chem.Mol, verbose: bool=False) -> list:
-    '''
-    Find protonation site using templates
 
-    Params:
-    ----
-    `template`: `pandas.Dataframe` with columns of substructure names, SMARTS patterns, protonation indices and acid/base flags
-
-    `mol`: Molecule
-
-    `verbose`: Boolean flag for printing matching results
-
-    Return:
-    ----
-    A set of matched indices to be (de)protonated
-    '''
-    mol = Chem.AddHs(mol)
-    matches = []
-    for idx, name, smarts, index, acid_base in template.itertuples():
-        pattern = Chem.MolFromSmarts(smarts)
-        match = mol.GetSubstructMatches(pattern)
-        if len(match) == 0:
-            continue
+class Microstate:
+    def __init__(self, tautomerism: str | None = None, pattern_file: str | None = None, maxiter: int = 10) -> None:
+        self.tautomerism = tautomerism
+        self.pattern_file = pattern_file
+        self.maxiter = maxiter
+        self.template_a2b = None
+        self.template_b2a = None
+        if self.pattern_file is None:
+            pattern_path = importlib.resources.files("unipka.rules")
+            self._read_template(pattern_path / "smarts_pattern.tsv")
         else:
-            index = int(index)
-            for m in match:
-                matches.append(m[index])
-                if verbose:
-                    print(f"find index {m[index]} in pattern {name} smarts {smarts}")
-    return list(set(matches))
+            self._read_template(pattern_file)
+        
+        self.filters = make_filter({
+            sanitize_filter: {"filter_patterns": FILTER_PATTERNS},
+            stereo_filter: {}
+        })
 
 
-def prot_template(template: pd.DataFrame, smi: str, mode: str) -> tuple[list[int], list[str]]:
-    """
-    Protonate / Deprotonate a SMILES at every found site in the template
+    def _read_template(self, template_file: str) -> None:
+        '''
+        Read a protonation template.
 
-    Params:
-    ----
-    `template`: `pandas.Dataframe` with columns of substructure names, SMARTS patterns, protonation indices and acid/base flags
+        Params:
+        ----
+        `template_file`: path of `.csv`-like template, with columns of substructure names, SMARTS patterns, protonation indices and acid/base flags
 
-    `smi`: The SMILES to be processed
+        Return:
+        ----
+        `template_a2b`, `template_b2a`: acid to base and base to acid templates
+        '''
+        template = pd.read_csv(template_file, sep="\t")
 
-    `mode`: 
-        `a2b` means deprotonization, with a hydrogen atom or a heavy atom at `idx`; 
-        `b2a` means protonization, with a heavy atom at `idx`
-    """
-    mol = Chem.MolFromSmiles(smi)
-    sites = match_template(template, mol)
-    smis = []
-    for site in sites:
-        smis.append(Chem.CanonSmiles(Chem.MolToSmiles(Chem.RemoveHs(prot(mol, site, mode)))))
-    return sites, list(set(smis))
+        self.template_a2b = template[template.Acid_or_base == "A"]
+        self.template_b2a = template[template.Acid_or_base == "B"]
 
+ 
+    def _match_template(self, mol: Chem.Mol, mode: str) -> list[int]:
+        """Find protonation site using templates
 
+        Args:
+            mol (Chem.Mol): input molecule
+            mode (str): 'a2b' or 'b2a' for deprotonation or protonation
 
-def enumerate_template(smi: str | list[str], 
-                       template_a2b: pd.DataFrame, 
-                       template_b2a: pd.DataFrame, 
-                       mode: str="A", 
-                       maxiter: int=10, 
-                       verbose: int=0, 
-                       filter_patterns: list[Chem.Mol]=FILTER_PATTERNS) -> tuple[list[str], list[str]]:
-    """
-    Enumerate all the (de)protonation results of one SMILES.
+        Returns:
+            list: a list of matched indices to be (de)protonated
+        """
+        mol = Chem.AddHs(mol)
+        
+        if mode == 'a2b':
+            template = self.template_a2b
+        elif mode == 'b2a':
+            template = self.template_b2a
 
-    Params:
-    ----
-    `smi`: The smiles to be processed.
-
-    `template_a2b`: `pandas.Dataframe` with columns of substructure names, SMARTS patterns, deprotonation indices and acid flags.
-
-    `template_b2a`: `pandas.Dataframe` with columns of substructure names, SMARTS patterns, protonation indices and base flags.
-
-    `mode`: 
-        - "a2b": `smi` is an acid to be deprotonated.
-        - "b2a": `smi` is a base to be protonated.
-
-    `maxiter`: Max iteration number of template matching and microstate pool growth.
-
-    `verbose`:
-        - 0: Silent mode.
-        - 1: Print the length of microstate pools in each iteration.
-        - 2: Print the content of microstate pools in each iteration.
-
-    `filter_patterns`: Unreasonable chemical structures.
-
-    Return:
-    ----
-    A microstate pool and B microstate pool after enumeration.
-    """
-    if isinstance(smi, str):
-        smis = [smi]
-    else:
-        smis = list(smi)
-
-    enum_func = lambda x: [x] # TODO: Tautomerism enumeration
-
-    if mode == "a2b":
-        smis_A_pool, smis_B_pool = smis, []
-    elif mode == "b2a":
-        smis_A_pool, smis_B_pool = [], smis
-    filters = make_filter({
-        sanitize_filter: {"filter_patterns": filter_patterns},
-        stereo_filter: {}
-    })
-    pool_length_A = -1
-    pool_length_B = -1
-    i = 0
-    while (len(smis_A_pool) != pool_length_A or len(smis_B_pool) != pool_length_B) and i < maxiter:
-        pool_length_A, pool_length_B = len(smis_A_pool), len(smis_B_pool)
-        if verbose > 0:
-            print(f"iter {i}: {pool_length_A} acid, {pool_length_B} base")
-        if verbose > 1:
-            print(f"iter {i}, acid: {smis_A_pool}, base: {smis_B_pool}")
-        if (mode == "a2b" and (i + 1) % 2) or (mode == "b2a" and i % 2):
-            smis_A_tmp_pool = []
-            for smi in smis_A_pool:
-                smis_B_pool += filters(prot_template(template_a2b, smi, "a2b")[1])
-                smis_A_tmp_pool += filters([Chem.CanonSmiles(Chem.MolToSmiles(mol)) for mol in enum_func(Chem.MolFromSmiles(smi))])
-            smis_A_pool += smis_A_tmp_pool
-        elif (mode == "b2a" and (i + 1) % 2) or (mode == "a2b" and i % 2):
-            smis_B_tmp_pool = []
-            for smi in smis_B_pool:
-                smis_A_pool += filters(prot_template(template_b2a, smi, "b2a")[1])
-                smis_B_tmp_pool += filters([Chem.CanonSmiles(Chem.MolToSmiles(mol)) for mol in enum_func(Chem.MolFromSmiles(smi))])
-            smis_B_pool += smis_B_tmp_pool
-        smis_A_pool = filters(smis_A_pool)
-        smis_B_pool = filters(smis_B_pool)
-        smis_A_pool = list(set(smis_A_pool))
-        smis_B_pool = list(set(smis_B_pool))
-        i += 1
-    
-    if verbose > 0:
-        print(f"iter {i}: {pool_length_A} acid, {pool_length_B} base")
-    if verbose > 1:
-        print(f"iter {i}, acid: {smis_A_pool}, base: {smis_B_pool}")
-
-    smis_A_pool = list(map(Chem.CanonSmiles, smis_A_pool))
-    smis_B_pool = list(map(Chem.CanonSmiles, smis_B_pool))
-    
-    return smis_A_pool, smis_B_pool
-
-
-
-def read_template(template_file: str) -> tuple:
-    '''
-    Read a protonation template.
-
-    Params:
-    ----
-    `template_file`: path of `.csv`-like template, with columns of substructure names, SMARTS patterns, protonation indices and acid/base flags
-
-    Return:
-    ----
-    `template_a2b`, `template_b2a`: acid to base and base to acid templates
-    '''
-    template = pd.read_csv(template_file, sep="\t")
-    template_a2b = template[template.Acid_or_base == "A"]
-    template_b2a = template[template.Acid_or_base == "B"]
-    
-    return template_a2b, template_b2a
-
-
-
-def get_ensemble(smi: str, 
-                 template_a2b: pd.DataFrame, 
-                 template_b2a: pd.DataFrame, 
-                 maxiter: int=10) -> dict[int, list[str]]:
-    """Get the protonation state ensemble of a SMILES.
-
-    Args:
-        smi (str): SMILES
-        template_a2b (pd.DataFrame): transition from acid to base
-        template_b2a (pd.DataFrame): trasnsition from base to acid
-        maxiter (int, optional): max iterations. Defaults to 10.
-
-    Returns:
-        dict[int, list[str]]: {formal charge: [SMILES]}
-    """
-    ensemble = dict()
-    q0 = Chem.GetFormalCharge(Chem.MolFromSmiles(smi))
-    ensemble[q0] = [smi]
-
-    smis_0 = [smi]
-
-    smis_0, smis_b1 = enumerate_template(smis_0, 
-                                         template_a2b, 
-                                         template_b2a, 
-                                         maxiter=maxiter, 
-                                         mode="a2b")
-    if smis_b1:
-        ensemble[q0 - 1] = smis_b1
-    q = q0 - 2
-    while True:
-        if q + 1 in ensemble:
-            _, smis_b = enumerate_template(ensemble[q + 1], 
-                                           template_a2b, 
-                                           template_b2a, 
-                                           maxiter=maxiter, 
-                                           mode="a2b")
-            if smis_b:
-                ensemble[q] = smis_b
+        matches = []
+        for idx, name, smarts, index, acid_base in template.itertuples():
+            pattern = Chem.MolFromSmarts(smarts)
+            match = mol.GetSubstructMatches(pattern)
+            if len(match) == 0:
+                continue
             else:
-                break
-        q -= 1
+                index = int(index)
+                for m in match:
+                    matches.append(m[index])
+        
+        return list(set(matches))
 
-    smis_a1, smis_0 = enumerate_template(smis_0, 
-                                         template_a2b, 
-                                         template_b2a, 
-                                         maxiter=maxiter, 
-                                         mode="b2a")
-    if smis_a1:
-        ensemble[q0 + 1] = smis_a1
-    q = q0 + 2
-    while True:
-        if q - 1 in ensemble:
-            smis_a, _ = enumerate_template(ensemble[q - 1], 
-                                           template_a2b, 
-                                           template_b2a, 
-                                           maxiter=maxiter, 
-                                           mode="b2a")
-            if smis_a:
-                ensemble[q] = smis_a
-            else:
-                break
-        q += 1
-    
-    ensemble[q0] = smis_0
-    
-    return ensemble
 
+    def _protonate_template(self, smi: str, mode: str) -> tuple[list[int], list[str]]:
+        """
+        Protonate / Deprotonate a SMILES at every found site in the template
+
+        Params:
+        ----
+        `template`: `pandas.Dataframe` with columns of substructure names, SMARTS patterns, protonation indices and acid/base flags
+
+        `smi`: The SMILES to be processed
+
+        `mode`: 
+            `a2b` means deprotonization, with a hydrogen atom or a heavy atom at `idx`; 
+            `b2a` means protonization, with a heavy atom at `idx`
+        """
+        mol = Chem.MolFromSmiles(smi)
+        sites = self._match_template(mol, mode)
+        smis = []
+        for site in sites:
+            (protonated_mol, protonated_smi) = prot(mol, site, mode)
+            smis.append(protonated_smi)
+            # smis.append(Chem.CanonSmiles(Chem.MolToSmiles(Chem.RemoveHs(prot(mol, site, mode)))))
+        return sites, list(set(smis))
+
+
+    def del_proton(self, smi: str) -> list[str]:
+        return self._protonate_template(smi, "a2b")[1]
+    
+
+    def add_proton(self, smi: str) -> list[str]:
+        return self._protonate_template(smi, "b2a")[1]
+    
+
+    def enumerate_tautomers(self, smiles: str) -> list[str]:
+        # Moltaut 
+        # ct = ComprehensiveTautomers(smiles).enumerate()
+        if self.tautomerism == "comprehensive":
+            t = ComprehensiveTautomers(smiles).enumerate()
+        elif self.tautomerism == "rdkit":
+            t = RdkTautomers(smiles).enumerate()
+        else:
+            return [smiles]
+        return t.enumerated
+
+
+    def enumerate_template(self, smiles: str | list[str], mode: str="A") -> tuple[list[str], list[str]]:
+        """
+        Enumerate all the (de)protonation results of one SMILES.
+
+        Params:
+        ----
+        `smi`: The smiles to be processed.
+
+        `template_a2b`: `pandas.Dataframe` with columns of substructure names, SMARTS patterns, deprotonation indices and acid flags.
+
+        `template_b2a`: `pandas.Dataframe` with columns of substructure names, SMARTS patterns, protonation indices and base flags.
+
+        `mode`: 
+            - "a2b": `smi` is an acid to be deprotonated.
+            - "b2a": `smi` is a base to be protonated.
+
+        `maxiter`: Max iteration number of template matching and microstate pool growth.
+
+        `verbose`:
+            - 0: Silent mode.
+            - 1: Print the length of microstate pools in each iteration.
+            - 2: Print the content of microstate pools in each iteration.
+
+        `filter_patterns`: Unreasonable chemical structures.
+
+        Return:
+        ----
+        A microstate pool and B microstate pool after enumeration.
+        """
+        if isinstance(smiles, str):
+            smis = [smiles]
+        else:
+            smis = smiles
+
+        if mode == "a2b":
+            smis_A_pool, smis_B_pool = smis, []
+        elif mode == "b2a":
+            smis_A_pool, smis_B_pool = [], smis
+        
+        pool_length_A = -1
+        pool_length_B = -1
+        i = 0
+        while (len(smis_A_pool) != pool_length_A or len(smis_B_pool) != pool_length_B) and i < self.maxiter:
+            pool_length_A, pool_length_B = len(smis_A_pool), len(smis_B_pool)
+            if (mode == "a2b" and (i + 1) % 2) or (mode == "b2a" and i % 2):
+                smis_A_tmp_pool = []
+                for smi in smis_A_pool:
+                    smis_B_pool += self.filters(self.del_proton(smi))
+                    smis_A_tmp_pool += self.filters(self.enumerate_tautomers(smi))
+                smis_A_pool += smis_A_tmp_pool
+            elif (mode == "b2a" and (i + 1) % 2) or (mode == "a2b" and i % 2):
+                smis_B_tmp_pool = []
+                for smi in smis_B_pool:
+                    smis_A_pool += self.filters(self.add_proton(smi))
+                    smis_B_tmp_pool += self.filters(self.enumerate_tautomers(smi))
+                smis_B_pool += smis_B_tmp_pool
+            smis_A_pool = self.filters(smis_A_pool)
+            smis_B_pool = self.filters(smis_B_pool)
+            smis_A_pool = list(set(smis_A_pool))
+            smis_B_pool = list(set(smis_B_pool))
+            i += 1
+
+        smis_A_pool = list(map(Chem.CanonSmiles, smis_A_pool))
+        smis_B_pool = list(map(Chem.CanonSmiles, smis_B_pool))
+        
+        return smis_A_pool, smis_B_pool
+
+
+    def ensemble(self, smiles: str) -> dict[int, list[str]]:
+        """Get the protonation state ensemble of a SMILES.
+
+        Args:
+            smi (str): SMILES
+            template_a2b (pd.DataFrame): transition from acid to base
+            template_b2a (pd.DataFrame): trasnsition from base to acid
+            maxiter (int, optional): max iterations. Defaults to 10.
+
+        Returns:
+            dict[int, list[str]]: {formal charge: [SMILES]}
+        """
+        _ensemble = dict()
+        q0 = Chem.GetFormalCharge(Chem.MolFromSmiles(smiles))
+        _ensemble[q0] = [smiles]
+
+        smis_0 = [smiles]
+
+        smis_0, smis_b1 = self.enumerate_template(smis_0, mode="a2b")
+        if smis_b1:
+            _ensemble[q0 - 1] = smis_b1
+        q = q0 - 2
+        while True:
+            if q + 1 in _ensemble:
+                _, smis_b = self.enumerate_template(_ensemble[q + 1], mode="a2b")
+                if smis_b:
+                    _ensemble[q] = smis_b
+                else:
+                    break
+            q -= 1
+
+        smis_a1, smis_0 = self.enumerate_template(smis_0, mode="b2a")
+        if smis_a1:
+            _ensemble[q0 + 1] = smis_a1
+        q = q0 + 2
+        while True:
+            if q - 1 in _ensemble:
+                smis_a, _ = self.enumerate_template(_ensemble[q - 1], mode="b2a")
+                if smis_a:
+                    _ensemble[q] = smis_a
+                else:
+                    break
+            q += 1
+        
+        _ensemble[q0] = smis_0
+
+        unique_ensemble = {}
+        for k, v in _ensemble.items():
+            unique_ensemble[k] = list(set(v))
+        
+        return unique_ensemble

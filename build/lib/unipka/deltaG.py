@@ -10,7 +10,7 @@ from rdkit import Chem
 
 from .unimol import UniMolModel
 from .confgen import ConformerGen
-from .ensemble import enumerate_template, prot
+from .ensemble import Microstate, prot
 
 
 LN10 = math.log(10)
@@ -107,8 +107,9 @@ class FreeEnergyPredictor(object):
         return math.log10(sum([math.exp(-g) for g in DfGm]))
 
 
-    def macro_pKa(self, smi: str, template_a2b: pd.DataFrame, template_b2a: pd.DataFrame, mode: Literal["a2b", "b2a"]) -> float:
-        macrostate_A, macrostate_B = enumerate_template(smi, template_a2b, template_b2a, mode)
+    def macro_pKa(self, smi: str, mode: Literal["a2b", "b2a"]) -> float:
+        microstates = Microstate(smiles=smi)
+        macrostate_A, macrostate_B = microstates.enumerate_template(mode)
         DfGm_A = self.predict(macrostate_A)
         DfGm_B = self.predict(macrostate_B)
 

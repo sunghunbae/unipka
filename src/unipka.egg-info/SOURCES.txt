@@ -7,12 +7,15 @@ src/unipka/deltaG.py
 src/unipka/dictionary.py
 src/unipka/ensemble.py
 src/unipka/layers.py
+src/unipka/tautomerism.py
 src/unipka/unimol.py
 src/unipka.egg-info/PKG-INFO
 src/unipka.egg-info/SOURCES.txt
 src/unipka.egg-info/dependency_links.txt
 src/unipka.egg-info/requires.txt
 src/unipka.egg-info/top_level.txt
-src/unipka/pattern/simple_smarts_pattern.tsv
-src/unipka/pattern/smarts_pattern.tsv
+src/unipka/rules/simple_smarts_pattern.tsv
+src/unipka/rules/smarts_pattern.tsv
+src/unipka/rules/smirks_transform_all.txt
 tests/test.py
+tests/test1.py

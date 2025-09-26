@@ -1,10 +1,18 @@
 from pathlib import Path
-from unipka.ensemble import get_ensemble, read_template, prot, enumerate_template
+# from unipka.ensemble import get_ensemble, read_template, prot, enumerate_template
+from unipka.ensemble import MicrostateEnumerator
 from unipka.deltaG import FreeEnergyPredictor, calc_distribution
 from rdkit import Chem
 
 import importlib
 import math
+
+
+def test_microstate_enumerator():
+    microstates = MicrostateEnumerator(smiles="CC(N)C(=O)O")
+    E = microstates.ensemble()
+    print(E)
+
 
 
 if __name__ == "__main__":
