@@ -1,6 +1,8 @@
 from collections import OrderedDict
 from typing import Callable
+from dataclasses import dataclass
 import importlib
+import itertools
 import pandas as pd
 
 from rdkit import Chem
@@ -8,8 +10,16 @@ from rdkit import Chem
 from .tautomerism import ComprehensiveTautomers, RdkTautomers
 
 
+@dataclass
+class State:
+    smiles: str
+    rdmol: Chem.Mol
+    protons: dict[int, int] | None = None
+
+
+
 # Unreasonable chemical structures to be filtered
-FILTER_PATTERNS = list(map(Chem.MolFromSmarts, [
+DROP_PATTERNS = list(map(Chem.MolFromSmarts, [
     "[#6X5]",
     "[#7X5]",
     "[#8X4]",
@@ -33,73 +43,6 @@ FILTER_PATTERNS = list(map(Chem.MolFromSmarts, [
 ]))
 
 
-def sanitize_checker(smi: str, filter_patterns: list[Chem.Mol], verbose: bool=False) -> bool:
-    """
-    Check if a SMILES can be sanitized and does not contain unreasonable chemical structures.
-
-    Params:
-    ----
-    `smi`: The SMILES to be check.
-
-    `filter_patterns`: Unreasonable chemical structures.
-
-    `verbose`: If True, matched unreasonable chemical structures will be printed.
-
-    Return:
-    ----
-    If the SMILES should be filtered.
-    """
-    mol = Chem.AddHs(Chem.MolFromSmiles(smi))
-    for pattern in filter_patterns:
-        match = mol.GetSubstructMatches(pattern)
-        if match:
-            if verbose:
-                print(f"pattern {pattern}")
-            return False
-    try:
-        Chem.SanitizeMol(mol)
-    except:
-        print("cannot sanitize")
-        return False
-    return True
-
-
-def sanitize_filter(smis: list[str], filter_patterns: list[Chem.Mol]=FILTER_PATTERNS) -> list[str]:
-    """
-    A filter for SMILES can be sanitized and does not contain unreasonable chemical structures.
-
-    Params:
-    ----
-    `smis`: The list of SMILES.
-
-    `filter_patterns`: Unreasonable chemical structures.
-
-    Return:
-    ----
-    The list of SMILES filtered.
-    """
-    def _checker(smi):
-        return sanitize_checker(smi, filter_patterns)
-    return list(filter(_checker, smis))
-
-
-def make_filter(filter_param: OrderedDict) -> Callable:
-    """
-    Make a sequential SMILES filter
-
-    Params:
-    ----
-    `filter_param`: An `collections.OrderedDict` whose keys are single filter functions and the corresponding values are their parameter dictionary.
-
-    Return:
-    ----
-    The sequential filter function
-    """
-    def seq_filter(smis):
-        for single_filter, param in filter_param.items():
-            smis = single_filter(smis, **param)
-        return smis
-    return seq_filter
 
 
 def cnt_stereo_atom(smi: str) -> int:
@@ -126,7 +69,7 @@ def stereo_filter(smis: list[str]) -> list[str]:
     return [value[0] for value in filtered_smi_dict.values()]
 
 
-def prot(mol: Chem.Mol, idx: int, mode: str) -> tuple[Chem.Mol, str]: 
+def prot(mol: Chem.Mol, idx: int, mode: str, protons: dict[int, int]) -> State: 
     """Protonate or deprotonate a molecule at a specific site.
 
     Args:
@@ -138,39 +81,53 @@ def prot(mol: Chem.Mol, idx: int, mode: str) -> tuple[Chem.Mol, str]:
         Chem.Mol: (de)protonated molecule
     """
     mw = Chem.RWMol(mol)
-    if mode == "a2b":
-        atom_H = mw.GetAtomWithIdx(idx)
-        if atom_H.GetAtomicNum() == 1:
-            atom_A = atom_H.GetNeighbors()[0]
-            charge_A = atom_A.GetFormalCharge()
-            atom_A.SetFormalCharge(charge_A - 1)
-            mw.RemoveAtom(idx)
-            mol_prot = mw.GetMol()
-        else:
-            charge_H = atom_H.GetFormalCharge()
-            numH_H = atom_H.GetTotalNumHs()
-            atom_H.SetFormalCharge(charge_H - 1)
-            atom_H.SetNumExplicitHs(numH_H - 1)
-            atom_H.UpdatePropertyCache()
-            mol_prot = Chem.AddHs(mw)
-    elif mode == "b2a":
-        atom_B = mw.GetAtomWithIdx(idx)
-        charge_B = atom_B.GetFormalCharge()
-        atom_B.SetFormalCharge(charge_B + 1)
-        numH_B = atom_B.GetNumExplicitHs()
-        atom_B.SetNumExplicitHs(numH_B + 1)
-        mol_prot = Chem.AddHs(mw)
-    Chem.SanitizeMol(mol_prot)
-    mol_prot = Chem.MolFromSmiles(Chem.MolToSmiles(mol_prot, canonical=False))
-    mol_prot = Chem.AddHs(mol_prot)
-    _ = Chem.Mol(mol_prot) # copy
-    mol_prot_smiles = Chem.CanonSmiles(Chem.MolToSmiles(Chem.RemoveHs(_)))
+    atom = mw.GetAtomWithIdx(idx)
+    molH = None
+    xidx : int = idx
+    numH = None
 
-    return (mol_prot, mol_prot_smiles)
+    if mode == "a2b":
+        if atom.GetAtomicNum() == 1:
+            atom_X = atom.GetNeighbors()[0] # only one
+            charge = atom_X.GetFormalCharge() -1
+            atom_X.SetFormalCharge(charge)
+            mw.RemoveAtom(idx) # H atom with the idx is removed
+            molH = mw.GetMol()
+            xidx = atom_X.GetAtomIdx()
+        else:
+            charge = atom.GetFormalCharge() -1
+            numH = atom.GetTotalNumHs() -1
+            atom.SetFormalCharge(charge)
+            if numH >= 0:
+                atom.SetNumExplicitHs(numH)
+            atom.UpdatePropertyCache()
+            molH = Chem.AddHs(mw)
+    
+    elif mode == "b2a":
+        charge = atom.GetFormalCharge() + 1
+        numH = atom.GetNumExplicitHs() + 1
+        atom.SetFormalCharge(charge)
+        atom.SetNumExplicitHs(numH)
+        molH = Chem.AddHs(mw)
+
+    Chem.SanitizeMol(molH)
+    
+    # molH = Chem.MolFromSmiles(Chem.MolToSmiles(molH, canonical=False))
+    # molH = Chem.AddHs(molH)
+    molH_smiles = Chem.CanonSmiles(Chem.MolToSmiles(Chem.RemoveHs(Chem.Mol(molH))))
+
+    # return (molH, molH_smiles)
+    curr_protons = {k:v for k,v in protons.items()}
+    curr_protons[xidx] = numH
+
+    return State(smiles=molH_smiles, rdmol=molH, protons=curr_protons)
+
+
 
 
 
 class Microstate:
+    
     def __init__(self, tautomerism: str | None = None, pattern_file: str | None = None, maxiter: int = 10) -> None:
         self.tautomerism = tautomerism
         self.pattern_file = pattern_file
@@ -178,15 +135,36 @@ class Microstate:
         self.template_a2b = None
         self.template_b2a = None
         if self.pattern_file is None:
-            pattern_path = importlib.resources.files("unipka.rules")
-            self._read_template(pattern_path / "smarts_pattern.tsv")
+            self._read_template(importlib.resources.files("unipka.rules") / "smarts_pattern.tsv")
         else:
             self._read_template(pattern_file)
         
-        self.filters = make_filter({
-            sanitize_filter: {"filter_patterns": FILTER_PATTERNS},
-            stereo_filter: {}
-        })
+
+    def _drop_unreasonable(self, states: list[State]) -> list[State]:
+        mask = [] # select mask
+        for state in states:
+            select = True
+            if state.rdmol is None:
+                select = False
+            else:
+                for pattern in DROP_PATTERNS:
+                    if len(state.rdmol.GetSubstructMatches(pattern)) > 0:
+                        select = False
+                        break
+            mask.append(select)
+        return list(itertools.compress(states, mask))
+    
+
+    def _drop_duplicate(self, states: list[State]) -> list[State]:
+        U = []
+        mask = []
+        for state in states:
+            if state.smiles in U:
+                mask.append(False)
+            else:
+                mask.append(True)
+                U.append(state.smiles)
+        return list(itertools.compress(states, mask))
 
 
     def _read_template(self, template_file: str) -> None:
@@ -218,6 +196,7 @@ class Microstate:
             list: a list of matched indices to be (de)protonated
         """
         mol = Chem.AddHs(mol)
+        template = None
         
         if mode == 'a2b':
             template = self.template_a2b
@@ -238,7 +217,7 @@ class Microstate:
         return list(set(matches))
 
 
-    def _protonate_template(self, smi: str, mode: str) -> tuple[list[int], list[str]]:
+    def _protonate_template(self, smi: str, mode: str) -> list[State]:
         """
         Protonate / Deprotonate a SMILES at every found site in the template
 
@@ -254,23 +233,25 @@ class Microstate:
         """
         mol = Chem.MolFromSmiles(smi)
         sites = self._match_template(mol, mode)
-        smis = []
+        protons = {}
         for site in sites:
-            (protonated_mol, protonated_smi) = prot(mol, site, mode)
-            smis.append(protonated_smi)
-            # smis.append(Chem.CanonSmiles(Chem.MolToSmiles(Chem.RemoveHs(prot(mol, site, mode)))))
-        return sites, list(set(smis))
+            atom = mol.GetAtomWithIdx(site)
+            if atom.GetAtomicNum() == 1:
+                protons[site] = atom.GetNeighbors()[0].GetNumExplicitHs()
+            else:
+                protons[site] = atom.GetNumExplicitHs()
+        return [prot(mol, site, mode, protons) for site in sites]
 
 
-    def del_proton(self, smi: str) -> list[str]:
-        return self._protonate_template(smi, "a2b")[1]
+    def del_proton(self, smi: str) -> list[State]:
+        return self._protonate_template(smi, "a2b")
     
 
-    def add_proton(self, smi: str) -> list[str]:
-        return self._protonate_template(smi, "b2a")[1]
+    def add_proton(self, smi: str) -> list[State]:
+        return self._protonate_template(smi, "b2a")
     
 
-    def enumerate_tautomers(self, smiles: str) -> list[str]:
+    def enumerate_tautomers(self, smiles: str) -> list[State]:
         # Moltaut 
         # ct = ComprehensiveTautomers(smiles).enumerate()
         if self.tautomerism == "comprehensive":
@@ -278,11 +259,12 @@ class Microstate:
         elif self.tautomerism == "rdkit":
             t = RdkTautomers(smiles).enumerate()
         else:
-            return [smiles]
-        return t.enumerated
+            return [State(smiles=s, rdmol=Chem.MolFromSmiles(s)) for s in smiles]
+        
+        return [State(smiles=s, rdmol=Chem.MolFromSmiles(s)) for s in t.enumerated]
 
 
-    def enumerate_template(self, smiles: str | list[str], mode: str="A") -> tuple[list[str], list[str]]:
+    def enumerate_template(self, init_states: list[State], mode: str) -> tuple[list[State], list[State]]:
         """
         Enumerate all the (de)protonation results of one SMILES.
 
@@ -311,43 +293,46 @@ class Microstate:
         ----
         A microstate pool and B microstate pool after enumeration.
         """
-        if isinstance(smiles, str):
-            smis = [smiles]
-        else:
-            smis = smiles
+        pool_A = []
+        pool_B = []
 
+        # if isinstance(smiles, str):
+        #     init_states = [State(smiles=smiles, rdmol=Chem.MolFromSmiles(smiles))]
+        # if isinstance(smiles, list):
+        #     init_states = [State(smiles=s, rdmol=Chem.MolFromSmiles(s)) for s in smiles]
+         
         if mode == "a2b":
-            smis_A_pool, smis_B_pool = smis, []
+            pool_A = init_states
         elif mode == "b2a":
-            smis_A_pool, smis_B_pool = [], smis
+            pool_B = init_states
         
-        pool_length_A = -1
-        pool_length_B = -1
+        pool_A_size = -1
+        pool_B_size = -1
         i = 0
-        while (len(smis_A_pool) != pool_length_A or len(smis_B_pool) != pool_length_B) and i < self.maxiter:
-            pool_length_A, pool_length_B = len(smis_A_pool), len(smis_B_pool)
+
+        # coupled enumeration
+        while (len(pool_A) != pool_A_size or len(pool_B) != pool_B_size) and i < self.maxiter:
+            pool_A_size, pool_B_size = len(pool_A), len(pool_B)
             if (mode == "a2b" and (i + 1) % 2) or (mode == "b2a" and i % 2):
                 smis_A_tmp_pool = []
-                for smi in smis_A_pool:
-                    smis_B_pool += self.filters(self.del_proton(smi))
-                    smis_A_tmp_pool += self.filters(self.enumerate_tautomers(smi))
-                smis_A_pool += smis_A_tmp_pool
+                for st in pool_A:
+                    pool_B += self._drop_unreasonable(self.del_proton(st.smiles))
+                    smis_A_tmp_pool += self._drop_unreasonable(self.enumerate_tautomers(st.smiles))
+                pool_A += smis_A_tmp_pool
             elif (mode == "b2a" and (i + 1) % 2) or (mode == "a2b" and i % 2):
                 smis_B_tmp_pool = []
-                for smi in smis_B_pool:
-                    smis_A_pool += self.filters(self.add_proton(smi))
-                    smis_B_tmp_pool += self.filters(self.enumerate_tautomers(smi))
-                smis_B_pool += smis_B_tmp_pool
-            smis_A_pool = self.filters(smis_A_pool)
-            smis_B_pool = self.filters(smis_B_pool)
-            smis_A_pool = list(set(smis_A_pool))
-            smis_B_pool = list(set(smis_B_pool))
+                for st in pool_B:
+                    pool_A += self._drop_unreasonable(self.add_proton(st.smiles))
+                    smis_B_tmp_pool += self._drop_unreasonable(self.enumerate_tautomers(st.smiles))
+                pool_B += smis_B_tmp_pool
+            
+            pool_A = self._drop_unreasonable(pool_A)
+            pool_B = self._drop_unreasonable(pool_B)
+            pool_A = self._drop_duplicate(pool_A)
+            pool_B = self._drop_duplicate(pool_B)
             i += 1
-
-        smis_A_pool = list(map(Chem.CanonSmiles, smis_A_pool))
-        smis_B_pool = list(map(Chem.CanonSmiles, smis_B_pool))
         
-        return smis_A_pool, smis_B_pool
+        return pool_A, pool_B
 
 
     def ensemble(self, smiles: str) -> dict[int, list[str]]:
@@ -364,40 +349,41 @@ class Microstate:
         """
         _ensemble = dict()
         q0 = Chem.GetFormalCharge(Chem.MolFromSmiles(smiles))
-        _ensemble[q0] = [smiles]
+        _ensemble[q0] = [State(smiles=smiles, rdmol=Chem.MolFromSmiles(smiles))]
 
-        smis_0 = [smiles]
-
-        smis_0, smis_b1 = self.enumerate_template(smis_0, mode="a2b")
-        if smis_b1:
-            _ensemble[q0 - 1] = smis_b1
+        pool_0 = [State(smiles=smiles, rdmol=Chem.MolFromSmiles(smiles))]
+        pool_0, pool_b1 = self.enumerate_template(pool_0, mode="a2b")
+        
+        if pool_b1:
+            _ensemble[q0 - 1] = pool_b1
+        
         q = q0 - 2
         while True:
             if q + 1 in _ensemble:
-                _, smis_b = self.enumerate_template(_ensemble[q + 1], mode="a2b")
-                if smis_b:
-                    _ensemble[q] = smis_b
+                _, pool_b = self.enumerate_template(_ensemble[q + 1], mode="a2b")
+                if pool_b:
+                    _ensemble[q] = pool_b
                 else:
                     break
             q -= 1
 
-        smis_a1, smis_0 = self.enumerate_template(smis_0, mode="b2a")
-        if smis_a1:
-            _ensemble[q0 + 1] = smis_a1
+        pool_a1, pool_0 = self.enumerate_template(pool_0, mode="b2a")
+        if pool_a1:
+            _ensemble[q0 + 1] = pool_a1
         q = q0 + 2
         while True:
             if q - 1 in _ensemble:
-                smis_a, _ = self.enumerate_template(_ensemble[q - 1], mode="b2a")
-                if smis_a:
-                    _ensemble[q] = smis_a
+                pool_a, _ = self.enumerate_template(_ensemble[q - 1], mode="b2a")
+                if pool_a:
+                    _ensemble[q] = pool_a
                 else:
                     break
             q += 1
         
-        _ensemble[q0] = smis_0
+        _ensemble[q0] = pool_0
 
         unique_ensemble = {}
         for k, v in _ensemble.items():
-            unique_ensemble[k] = list(set(v))
+            unique_ensemble[k] = self._drop_duplicate(v)
         
         return unique_ensemble

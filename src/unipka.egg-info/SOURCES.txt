@@ -18,4 +18,3 @@ src/unipka/rules/simple_smarts_pattern.tsv
 src/unipka/rules/smarts_pattern.tsv
 src/unipka/rules/smirks_transform_all.txt
 tests/test.py
-tests/test1.py

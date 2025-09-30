@@ -16,6 +16,8 @@ from .ensemble import Microstate, prot
 LN10 = math.log(10)
 TRANSLATE_PH = 6.504894871171601
 
+# kT = 0.001987 * 298.0 # (kcal/mol K), standard condition
+# C = math.log(10) * kT
 
 class MolDataset(Dataset):
     """
