@@ -22,6 +22,7 @@ Requires-Dist: torch
 Requires-Dist: rdkit>=2024
 Requires-Dist: pandas
 Requires-Dist: pytest
+Requires-Dist: rdworks>=0.61.4
 Dynamic: license-file
 
 # Uni-p*K*<sub>a</sub>

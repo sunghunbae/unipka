@@ -11,6 +11,7 @@ dependencies = [
     "rdkit>=2024",
     "pandas",
     "pytest",
+    "rdworks>=0.61.4"
     ]
 authors = [{name = "Sung-Hun Bae", email="sunghun.bae@gmail.com"}, ]
 maintainers = [{name = "Sung-Hun Bae", email="sunghun.bae@gmail.com"}, ]
@@ -41,4 +42,3 @@ version = {attr = "unipka.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-"unipka.rules" = ["*.tsv", "*.txt"]
