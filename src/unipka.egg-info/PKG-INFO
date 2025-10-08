@@ -9,20 +9,19 @@ Project-URL: Homepage, https://github.com/sunghunbae/unipka
 Project-URL: Repository, https://github.com/sunghunbae/unipka.git
 Project-URL: Issues, https://github.com/sunghunbae/unipka/issues
 Project-URL: Changelog, https://github.com/sunghunbae/unipka/blob/master/CHANGELOG.md
-Project-URL: Documentation, https://sunghunbae.github.io/unipka/
 Keywords: pKa,protonation,ensemble
 Classifier: Development Status :: 3 - Alpha
 Classifier: Intended Audience :: Developers
 Classifier: Programming Language :: Python :: 3
 Classifier: Operating System :: OS Independent
-Requires-Python: >=3.12
+Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: torch
 Requires-Dist: rdkit>=2024
 Requires-Dist: pandas
 Requires-Dist: pytest
-Requires-Dist: rdworks>=0.61.4
+Requires-Dist: rdworks>=0.63
 Dynamic: license-file
 
 # Uni-p*K*<sub>a</sub>

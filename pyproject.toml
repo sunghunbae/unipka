@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "unipka"
 dynamic = ["version"]
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "torch",
     "rdkit>=2024",
     "pandas",
     "pytest",
-    "rdworks>=0.61.4"
+    "rdworks>=0.63"
     ]
 authors = [{name = "Sung-Hun Bae", email="sunghun.bae@gmail.com"}, ]
 maintainers = [{name = "Sung-Hun Bae", email="sunghun.bae@gmail.com"}, ]
@@ -31,7 +31,6 @@ Homepage        = "https://github.com/sunghunbae/unipka"
 Repository      = "https://github.com/sunghunbae/unipka.git"
 Issues          = "https://github.com/sunghunbae/unipka/issues"
 Changelog       = "https://github.com/sunghunbae/unipka/blob/master/CHANGELOG.md"
-Documentation   = "https://sunghunbae.github.io/unipka/"
 
 [project.scripts]
 

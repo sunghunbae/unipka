@@ -2,4 +2,4 @@ torch
 rdkit>=2024
 pandas
 pytest
-rdworks>=0.61.4
+rdworks>=0.63
