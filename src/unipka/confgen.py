@@ -81,8 +81,8 @@ class ConformerGen(object):
         assert len(atoms)>0, 'No atoms in molecule: {}'.format(smi)
         try:
             # will random generate conformer with seed equal to -1. else fixed random seed.
-            res = rdDistGeom.EmbedMultipleConfs(mol, numConfs=10, params=ETKDG_params)
-            #res = AllChem.EmbedMolecule(mol, randomSeed=seed)
+            #res = rdDistGeom.EmbedMultipleConfs(mol, numConfs=10, params=ETKDG_params)
+            res = AllChem.EmbedMolecule(mol, randomSeed=seed)
             if res == 0:
                 try:
                     # some conformer can not use MMFF optimize
