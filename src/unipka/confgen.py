@@ -13,7 +13,7 @@ ETKDG_params = rdDistGeom.ETKDGv3()
 ETKDG_params.useSmallRingTorsions = True
 ETKDG_params.maxIterations = 2000
 ETKDG_params.clearConfs = True
-ETKDG_params.useRandomCoords = True
+ETKDG_params.useRandomCoords = False
 ETKDG_params.randomSeed = 42
 
 
