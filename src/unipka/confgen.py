@@ -12,6 +12,9 @@ from .dictionary import Dictionary, DICT, DICT_CHARGE
 ETKDG_params = rdDistGeom.ETKDGv3()
 ETKDG_params.useSmallRingTorsions = True
 ETKDG_params.maxIterations = 2000
+ETKDG_params.clearConfs = True
+ETKDG_params.useRandomCoords = True
+ETKDG_params.randomSeed = 42
 
 
 logger = logging.getLogger(__name__)
@@ -78,7 +81,7 @@ class ConformerGen(object):
         assert len(atoms)>0, 'No atoms in molecule: {}'.format(smi)
         try:
             # will random generate conformer with seed equal to -1. else fixed random seed.
-            res = rdDistGeom.EmbedMultipleConfs(mol, params=ETKDG_params)
+            res = rdDistGeom.EmbedMultipleConfs(mol, numConfs=10, params=ETKDG_params)
             #res = AllChem.EmbedMolecule(mol, randomSeed=seed)
             if res == 0:
                 try:
