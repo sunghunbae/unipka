@@ -102,8 +102,8 @@ class ConformerGen(object):
                 AllChem.Compute2DCoords(mol)
                 coordinates_2d = mol.GetConformer().GetPositions().astype(np.float32)
                 coordinates = coordinates_2d
-        except:
-            print("Failed to generate conformer, replace with zeros.")
+        except Exception as e:
+            print(f"Failed to generate conformer: {e}, replace with zeros.")
             coordinates = np.zeros((len(atoms),3))
         assert len(atoms) == len(coordinates), "coordinates shape is not align with {}".format(smi)
         if remove_hs:
