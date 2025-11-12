@@ -1,6 +1,6 @@
 from venv import logger
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, rdDistGeom
 from scipy.spatial import distance_matrix
 
 import logging
@@ -17,6 +17,11 @@ class ConformerGen(object):
     '''
     This class designed to generate conformers for molecules represented as SMILES strings using provided parameters and configurations. The `transform` method uses multiprocessing to speed up the conformer generation process.
     '''
+
+    ETKDG_params = rdDistGeom.ETKDGv3()
+    ETKDG_params.useSmallRingTorsions = True
+    ETKDG_params.maxIterations = 2000
+
     def __init__(self, **params):
         """
         Initializes the neural network model based on the provided model name and parameters.
@@ -72,7 +77,8 @@ class ConformerGen(object):
         assert len(atoms)>0, 'No atoms in molecule: {}'.format(smi)
         try:
             # will random generate conformer with seed equal to -1. else fixed random seed.
-            res = AllChem.EmbedMolecule(mol, randomSeed=seed)
+            res = rdDistGeom.EmbedMultipleConfs(mol, params=self.ETKDG_params)
+            #res = AllChem.EmbedMolecule(mol, randomSeed=seed)
             if res == 0:
                 try:
                     # some conformer can not use MMFF optimize
