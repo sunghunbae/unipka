@@ -1,6 +1,6 @@
 # Uni-pKa trained weight(v2)
 
-The model weight was downloaded from https://www.bohrium.com/notebooks/38543442597 
+The model weight can be downloaded from https://www.bohrium.com/notebooks/38543442597 
 (login required).
 
 ```bash
